@@ -20,9 +20,15 @@ object RandomForestMain {
     val conf = new SparkConf().setAppName("Random Forest Classification")
     val sc = new SparkContext(conf)
 
-    val data = MLUtils.loadLibSVMFile(sc, "input/sample_train.csv")
+    val sqlContext= new org.apache.spark.sql.SQLContext(sc)
+    import sqlContext.implicits._
 
-    data.collect()
-    
+    //val df = sqlContext.read.load("input/sample_train.csv", format="csv", header="true", inferSchema="true")
+
+    val dataframe = sqlContext.read.format("csv")
+                         .option("header", "true")
+                         .option("inferSchema", "true")
+                         .load("input/sample_train.csv")
+
   }
 }
