@@ -5,13 +5,14 @@ import org.apache.log4j.LogManager
 import org.apache.log4j.Level
 import org.apache.spark.ml.Pipeline
 import org.apache.spark.ml.classification.DecisionTreeClassifier
-import org.apache.spark.ml.feature.{VectorAssembler, VectorIndexer}
+import org.apache.spark.ml.feature.{VectorAssembler, VectorIndexer, VectorSlicer}
 import org.apache.spark.mllib.tree.DecisionTree
 import org.apache.spark.mllib.tree.model.DecisionTreeModel
 import org.apache.spark.mllib.util.MLUtils
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.dsl.expressions.{DslExpression, StringToAttributeConversionHelper}
 import org.apache.spark.sql.{DataFrame, SparkSession}
+import scala.util.Random
 
 object RandomForestMain {
 
@@ -83,14 +84,35 @@ object RandomForestMain {
     // Train a DecisionTree model.
     val dt = new DecisionTreeClassifier()
       .setLabelCol("# label")
-      .setFeaturesCol("features")
+      .setFeaturesCol("sampledFeatures")
 
     // Chain indexers and tree in a Pipeline
     val trainingPipeline = new Pipeline()
       .setStages(Array(dt))
 
-    val numTrees = 10
-    val bootStrapSamples: RDD[(Int, DataFrame)] = getBootstrapSamples(sc, trainingData, numTrees, 5)
+    val numTrees = 2
+    // Array of multiple pipelines
+    var treeArray = Array[(Int, Pipeline)]()
+    for (i <- 0 until numTrees) {
+      treeArray = treeArray :+ (i, trainingPipeline)
+    }
+
+    val treeRDD: RDD[(Int, Pipeline)] = sc.parallelize(treeArray).partitionBy(new HashPartitioner(2))
+    val models = treeRDD.mapValues (tree => {
+      val bootstrapSample = broadcastTrain.value.sample(withReplacement = true, fraction = 1)
+
+      tree.fit(bootstrapSample)
+    })
+
+    val predictions: RDD[(Int, DataFrame)] = models.mapValues(tree => {
+      tree.transform(broadcastTest.value)
+    })
+
+    predictions.foreach{case (i, pred) =>
+      pred.select("rawPrediction", "probability", "prediction", "# label").show(10)
+    }
+
+    //val bootStrapSamples: RDD[(Int, DataFrame)] = getBootstrapSamples(sc, trainingData, numTrees, 5)
 
   }
 }
