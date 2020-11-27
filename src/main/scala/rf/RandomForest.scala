@@ -3,6 +3,9 @@ package rf
 import org.apache.spark.{HashPartitioner, RangePartitioner, SparkConf, SparkContext, sql}
 import org.apache.log4j.LogManager
 import org.apache.log4j.Level
+import org.apache.spark.ml.Pipeline
+import org.apache.spark.ml.classification.DecisionTreeClassifier
+import org.apache.spark.ml.feature.{VectorAssembler, VectorIndexer}
 import org.apache.spark.mllib.tree.DecisionTree
 import org.apache.spark.mllib.tree.model.DecisionTreeModel
 import org.apache.spark.mllib.util.MLUtils
@@ -27,6 +30,10 @@ object RandomForestMain {
       .partitionBy(new HashPartitioner(numPartitions))
 
   }
+
+  def decisionTree(data: DataFrame) = {
+
+  }
   
   def main(args: Array[String]) {
     val logger: org.apache.log4j.Logger = LogManager.getRootLogger
@@ -49,16 +56,30 @@ object RandomForestMain {
     for (col <- columns) {
       logger.info(col)
     }
+    val features = columns.slice(1, columns.length)
 
     //Verify data types
     val dataTypes = dataFrame.schema.fields.map(x=>x.dataType).map(x=>x.toString)
     for (data <- dataTypes) {
       logger.info(data)
     }
+
+    // Convert features to required format
+    val assembler = new VectorAssembler()
+      .setInputCols(features)
+      .setOutputCol("features")
+
+    val stages = Array(assembler)
+    val pipeline = new Pipeline()
+      .setStages(stages)
+
+    dataFrame = pipeline.fit(dataFrame).transform(dataFrame)
+    dataFrame = dataFrame.drop(features:_*)
+
     val Array(trainingData, testData) = dataFrame.randomSplit(Array(0.7, 0.3))
 
     val numTrees = 10
     val bootStrapSamples: RDD[(Int, DataFrame)] = getBootstrapSamples(sc, trainingData, numTrees, 5)
-    bootStrapSamples.collect()
+
   }
 }
