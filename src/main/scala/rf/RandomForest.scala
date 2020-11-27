@@ -34,7 +34,7 @@ object RandomForestMain {
   def decisionTree(data: DataFrame) = {
 
   }
-  
+
   def main(args: Array[String]) {
     val logger: org.apache.log4j.Logger = LogManager.getRootLogger
     if (args.length != 2) {
@@ -70,13 +70,24 @@ object RandomForestMain {
       .setOutputCol("features")
 
     val stages = Array(assembler)
-    val pipeline = new Pipeline()
+    val preprocessPipeline = new Pipeline()
       .setStages(stages)
 
-    dataFrame = pipeline.fit(dataFrame).transform(dataFrame)
+    dataFrame = preprocessPipeline.fit(dataFrame).transform(dataFrame)
     dataFrame = dataFrame.drop(features:_*)
 
     val Array(trainingData, testData) = dataFrame.randomSplit(Array(0.7, 0.3))
+    val broadcastTrain = sc.broadcast(trainingData)
+    val broadcastTest = sc.broadcast(testData)
+
+    // Train a DecisionTree model.
+    val dt = new DecisionTreeClassifier()
+      .setLabelCol("# label")
+      .setFeaturesCol("features")
+
+    // Chain indexers and tree in a Pipeline
+    val trainingPipeline = new Pipeline()
+      .setStages(Array(dt))
 
     val numTrees = 10
     val bootStrapSamples: RDD[(Int, DataFrame)] = getBootstrapSamples(sc, trainingData, numTrees, 5)

@@ -26,3 +26,4 @@ hs_err_pid*
 #Input Files
 *.csv
 target/
+output*/
