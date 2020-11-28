@@ -25,7 +25,7 @@ object RandomForest {
     import ss.implicits._
 
     // Number of trees in RandomForest
-    val numTrees = 2
+    val numTrees = 5
 
     var dataFrame = ss.read.format("csv")
                       .option("header", "true")
@@ -136,8 +136,23 @@ object RandomForest {
     val results = allPredictions.toDF("Id", "prediction").as("preds")
       .join(broadcastTest.value.as("test"), col("preds.Id") === col("test.Id"))
       .select("test.Id", "preds.prediction", "test.# label")
-      .sort("test.Id")
+      .repartitionByRange(10, col("Id"))
+      .sort("Id")
 
-    results.write.csv(args(1))
+    val numCorrect = sc.longAccumulator("numCorrect")
+    val numTotal = sc.longAccumulator("total")
+
+    results.foreachPartition(p => {
+      for (row <- p) {
+        numTotal.add(1L)
+        if (row(1) == row(2))
+          numCorrect.add(1L)
+      }
+    })
+
+    val accuracy = numCorrect.value.toDouble / numTotal.value.toDouble
+    logger.info("Accuracy: " + accuracy.toString)
+
+    results.write.option("header", "true").csv(args(1))
   }
 }
