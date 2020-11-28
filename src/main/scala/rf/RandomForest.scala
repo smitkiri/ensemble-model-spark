@@ -106,25 +106,18 @@ object RandomForestMain {
       (idx, (tree.fit(bootstrapSample), randomFeatures))
     }
 
-    val predictions: RDD[(Int, DataFrame)] = models.mapValues{
-      case (tree, randomFeatures) =>
+    val dtPredictions = models.flatMap {
+      case (_, (tree, randomFeatures)) =>
         val slicer = new VectorSlicer()
           .setInputCol("features")
           .setOutputCol("sampledFeatures")
 
         slicer.setIndices(randomFeatures)
         val testData = slicer.transform(broadcastTest.value)
-        tree.transform(testData)
-    }
-
-    //Creating Schema for Empty DataFrame
-    val schema = StructType(
-
-    )
-
-    predictions.foreach{case (i, pred) =>
-      pred.select("rawPrediction", "probability", "prediction", "# label", "Id").printSchema()
-      //logger.info(schema)
+        val pred = tree.transform(testData)
+        pred.select("Id", "prediction").rdd
+          .map(row => (row(0).asInstanceOf[Long], row(1).asInstanceOf[Double]))
+          .collect()
     }
 
   }
