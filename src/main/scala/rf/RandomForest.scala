@@ -16,26 +16,6 @@ import scala.util.Random
 
 object RandomForestMain {
 
-  def getDummyArray(num: Int, data: DataFrame): Array[(Int, DataFrame)] = {
-    var dummy = Array[(Int, DataFrame)]()
-    for (i <- 0 to num) {
-      dummy = dummy :+ (i, data.sample(withReplacement = true, fraction = 1))
-    }
-    dummy
-  }
-
-  def getBootstrapSamples(sc: SparkContext, data: DataFrame, numSamples: Int,
-                          numPartitions: Int): RDD[(Int, DataFrame)] = {
-
-    sc.parallelize(getDummyArray(numSamples, data))
-      .partitionBy(new HashPartitioner(numPartitions))
-
-  }
-
-  def decisionTree(data: DataFrame) = {
-
-  }
-
   def main(args: Array[String]) {
     val logger: org.apache.log4j.Logger = LogManager.getRootLogger
     if (args.length != 2) {
@@ -98,21 +78,38 @@ object RandomForestMain {
     }
 
     val treeRDD: RDD[(Int, Pipeline)] = sc.parallelize(treeArray).partitionBy(new HashPartitioner(2))
-    val models = treeRDD.mapValues (tree => {
-      val bootstrapSample = broadcastTrain.value.sample(withReplacement = true, fraction = 1)
+    val models = treeRDD.map {case (idx, tree)  =>
+      var bootstrapSample = broadcastTrain.value.sample(withReplacement = true, fraction = 1)
+      val slicer = new VectorSlicer()
+        .setInputCol("features")
+        .setOutputCol("sampledFeatures")
 
-      tree.fit(bootstrapSample)
-    })
+      val r = new scala.util.Random
+      r.setSeed(idx)
+      var randomFeatures = Array[Int]()
+      for (_ <- 0 until scala.math.sqrt(features.length).toInt) {
+        randomFeatures = randomFeatures :+ r.nextInt(features.length)
+      }
 
-    val predictions: RDD[(Int, DataFrame)] = models.mapValues(tree => {
-      tree.transform(broadcastTest.value)
-    })
+      slicer.setIndices(randomFeatures)
+      bootstrapSample = slicer.transform(bootstrapSample)
+      (idx, (tree.fit(bootstrapSample), randomFeatures))
+    }
+
+    val predictions: RDD[(Int, DataFrame)] = models.mapValues{
+      case (tree, randomFeatures) =>
+        val slicer = new VectorSlicer()
+          .setInputCol("features")
+          .setOutputCol("sampledFeatures")
+
+        slicer.setIndices(randomFeatures)
+        val testData = slicer.transform(broadcastTest.value)
+        tree.transform(testData)
+    }
 
     predictions.foreach{case (i, pred) =>
       pred.select("rawPrediction", "probability", "prediction", "# label").show(10)
     }
-
-    //val bootStrapSamples: RDD[(Int, DataFrame)] = getBootstrapSamples(sc, trainingData, numTrees, 5)
 
   }
 }
