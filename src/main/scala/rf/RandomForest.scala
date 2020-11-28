@@ -11,8 +11,13 @@ import org.apache.spark.mllib.tree.model.DecisionTreeModel
 import org.apache.spark.mllib.util.MLUtils
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.dsl.expressions.{DslExpression, StringToAttributeConversionHelper}
-import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.sql.{DataFrame, Row, SparkSession}
+
 import scala.util.Random
+import org.apache.spark.sql.functions.typedLit
+import org.apache.spark.sql.types.IntegerType
+import org.apache.spark.sql.functions._
+
 
 object RandomForestMain {
 
@@ -26,6 +31,7 @@ object RandomForestMain {
     val sc = new SparkContext(conf)
 
     val ss = SparkSession.builder().getOrCreate()
+    import ss.implicits._
 
     var dataFrame = ss.read.format("csv")
                       .option("header", "true")
@@ -58,8 +64,11 @@ object RandomForestMain {
     dataFrame = dataFrame.drop(features:_*)
 
     val Array(trainingData, testData) = dataFrame.randomSplit(Array(0.7, 0.3))
+
+    val testDataWithId = testData.withColumn("Id", monotonically_increasing_id())
+
     val broadcastTrain = sc.broadcast(trainingData)
-    val broadcastTest = sc.broadcast(testData)
+    val broadcastTest = sc.broadcast(testDataWithId)
 
     // Train a DecisionTree model.
     val dt = new DecisionTreeClassifier()
@@ -108,8 +117,10 @@ object RandomForestMain {
     }
 
     predictions.foreach{case (i, pred) =>
-      pred.select("rawPrediction", "probability", "prediction", "# label").show(10)
+      pred.select("rawPrediction", "probability", "prediction", "# label", "Id").show(5)
     }
+
+
 
   }
 }
