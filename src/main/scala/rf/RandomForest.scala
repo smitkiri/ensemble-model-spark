@@ -25,12 +25,12 @@ object RandomForest {
     import ss.implicits._
 
     // Number of trees in RandomForest
-    val numTrees = 5
+    val numTrees = args(2).toInt
 
     var dataFrame = ss.read.format("csv")
                       .option("header", "true")
                       .option("inferSchema", "true")
-                      .load("input/sample_train.csv")
+                      .load(args(0))
 
     dataFrame = dataFrame
       .withColumn("# label", dataFrame.col("# label")
