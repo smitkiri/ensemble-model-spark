@@ -15,8 +15,9 @@ import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 
 import scala.util.Random
 import org.apache.spark.sql.functions.typedLit
-import org.apache.spark.sql.types.IntegerType
+import org.apache.spark.sql.types.{IntegerType, StructType}
 import org.apache.spark.sql.functions._
+import org.apache.spark.sql.types.{StructType, StructField, StringType}
 
 
 object RandomForestMain {
@@ -116,11 +117,15 @@ object RandomForestMain {
         tree.transform(testData)
     }
 
+    //Creating Schema for Empty DataFrame
+    val schema = StructType(
+
+    )
+
     predictions.foreach{case (i, pred) =>
-      val tempPredictions = pred.select("rawPrediction", "probability", "prediction", "# label", "Id")
+      pred.select("rawPrediction", "probability", "prediction", "# label", "Id").printSchema()
+      //logger.info(schema)
     }
-
-
 
   }
 }
