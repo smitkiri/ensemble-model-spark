@@ -117,7 +117,7 @@ object RandomForestMain {
     }
 
     predictions.foreach{case (i, pred) =>
-      pred.select("rawPrediction", "probability", "prediction", "# label", "Id").show(5)
+      val tempPredictions = pred.select("rawPrediction", "probability", "prediction", "# label", "Id")
     }
 
 
