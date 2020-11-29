@@ -5,12 +5,28 @@ import org.apache.spark.ml.{Pipeline, PipelineModel}
 import org.apache.spark.ml.classification.{DecisionTreeClassificationModel, DecisionTreeClassifier}
 import org.apache.spark.ml.feature.{VectorAssembler, VectorSlicer}
 import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.functions._
 import org.apache.spark.{HashPartitioner, SparkConf, SparkContext, sql}
 
 
 object RandomForest {
+
+  def preprocessData(df: DataFrame, featureNames: Array[String]): DataFrame = {
+    // Convert multiple feature columns to single vector column
+    val assembler = new VectorAssembler()
+      .setInputCols(featureNames)
+      .setOutputCol("features")
+
+    val stages = Array(assembler)
+    val preprocessPipeline = new Pipeline()
+      .setStages(stages)
+
+    var df = preprocessPipeline.fit(df).transform(df)
+    df = df.drop(featureNames:_*)
+
+    df
+  }
 
   def main(args: Array[String]) {
     val logger: org.apache.log4j.Logger = LogManager.getRootLogger
@@ -36,23 +52,12 @@ object RandomForest {
       .withColumn("# label", dataFrame.col("# label")
         .cast(sql.types.IntegerType))
 
-    // Verify column names
-    val columns = dataFrame.columns
 
     // Get list of feature columns, first column is label
+    val columns = dataFrame.columns
     val features = columns.slice(1, columns.length)
 
-    // Convert multiple feature columns to single vector column
-    val assembler = new VectorAssembler()
-      .setInputCols(features)
-      .setOutputCol("features")
-
-    val stages = Array(assembler)
-    val preprocessPipeline = new Pipeline()
-      .setStages(stages)
-
-    dataFrame = preprocessPipeline.fit(dataFrame).transform(dataFrame)
-    dataFrame = dataFrame.drop(features:_*)
+    dataFrame = preprocessData(dataFrame, features)
 
     // Split and broadcast training and testing data
     val Array(trainingData, testData) = dataFrame.randomSplit(Array(0.7, 0.3))
@@ -75,17 +80,13 @@ object RandomForest {
       val r = new scala.util.Random
       r.setSeed(itr)
       var randomFeatures: Array[Int] = Array[Int]()
-//      for (_ <- 0 until scala.math.sqrt(features.length).toInt) {
-//        randomFeatures = randomFeatures :+ r.nextInt(features.length - 1)
-//      }
 
-      while(randomFeatures.length < 5)
+      // Make sure we only select unique features
+      while(randomFeatures.length < scala.math.sqrt(features.length).toInt)
         {
-          var newVal = r.nextInt(features.length)
+          val newVal = r.nextInt(features.length)
           if(!randomFeatures.contains(newVal))
-          {
             randomFeatures = randomFeatures :+ newVal
-          }
         }
 
       val slicer = new VectorSlicer()
@@ -94,12 +95,14 @@ object RandomForest {
 
       slicer.setIndices(randomFeatures)
       bootstrapSample = slicer.transform(bootstrapSample)
-      val dtModel = trainingPipeline.fit(bootstrapSample)
 
+      val dtModel = trainingPipeline.fit(bootstrapSample)
       models = models.union(sc.parallelize(Seq((itr, (dtModel, randomFeatures)))))
     }
 
+    // Predictions of each example from every decision tree
     var dtPredictions = sc.emptyRDD[(Long, Double)].partitionBy(new HashPartitioner(10))
+
     for (itr <- 0 until numTrees) {
       val slicer = new VectorSlicer()
         .setInputCol("features")
@@ -130,6 +133,7 @@ object RandomForest {
       .repartitionByRange(10, col("Id"))
       .sort("Id")
 
+    // Calculate accuracy
     val numCorrect = sc.longAccumulator("numCorrect")
     val numTotal = sc.longAccumulator("total")
 
