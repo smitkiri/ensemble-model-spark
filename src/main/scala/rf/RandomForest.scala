@@ -14,8 +14,8 @@ object RandomForest {
 
   def main(args: Array[String]) {
     val logger: org.apache.log4j.Logger = LogManager.getRootLogger
-    if (args.length != 2) {
-      logger.error("Usage:\nwc.RandomForestMain <input dir> <output dir>")
+    if (args.length != 3) {
+      logger.error("Usage:\nrf.RandomForest <input dir> <output dir> <numTrees>")
       System.exit(1)
     }
     val conf = new SparkConf().setAppName("Random Forest Classification")
@@ -74,10 +74,19 @@ object RandomForest {
       // Get a random list of features for decision tree
       val r = new scala.util.Random
       r.setSeed(itr)
-      var randomFeatures = Array[Int]()
-      for (_ <- 0 until scala.math.sqrt(features.length).toInt) {
-        randomFeatures = randomFeatures :+ r.nextInt(features.length)
-      }
+      var randomFeatures: Array[Int] = Array[Int]()
+//      for (_ <- 0 until scala.math.sqrt(features.length).toInt) {
+//        randomFeatures = randomFeatures :+ r.nextInt(features.length - 1)
+//      }
+
+      while(randomFeatures.length < 5)
+        {
+          var newVal = r.nextInt(features.length)
+          if(!randomFeatures.contains(newVal))
+          {
+            randomFeatures = randomFeatures :+ newVal
+          }
+        }
 
       val slicer = new VectorSlicer()
         .setInputCol("features")
