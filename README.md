@@ -1,9 +1,10 @@
-Spark Twitter DataSet Follower Count Program
-Assignment 1 for CS-6240
+#HEPMASS Dataset - Random Forest<br> 
+Project for CS-6240<br>
 Fall 2020
 
 Code author
 -----------
+Smit Kiri<br>
 Vaibhav Saraf
 
 Installation
