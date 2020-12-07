@@ -1,74 +1,21 @@
 package rf
 
+import org.apache.spark.{HashPartitioner, SparkConf, SparkContext, sql}
 import org.apache.log4j.LogManager
-import org.apache.spark.ml.{Pipeline, PipelineModel}
+import org.apache.spark.ml.Pipeline
 import org.apache.spark.ml.classification.DecisionTreeClassifier
 import org.apache.spark.ml.feature.{VectorAssembler, VectorSlicer}
-import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.rdd.RDD
+import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
-import org.apache.spark.{HashPartitioner, SparkConf, SparkContext, sql}
 
 
 object RandomForest {
 
-  def preprocessData(df: DataFrame, featureNames: Array[String]): DataFrame = {
-    // Convert multiple feature columns to single vector column
-    val assembler = new VectorAssembler()
-      .setInputCols(featureNames)
-      .setOutputCol("features")
-
-    val stages = Array(assembler)
-    val preprocessPipeline = new Pipeline()
-      .setStages(stages)
-
-    preprocessPipeline.fit(df)
-      .transform(df)
-      .drop(featureNames:_*)
-  }
-
-  def getRandomIntList(upperBound: Int, n: Int, seed: Int): Array[Int] = {
-    // Get a random list of features for decision tree
-    val r = new scala.util.Random
-    r.setSeed(seed)
-    var randomNumbers: Array[Int] = Array[Int]()
-
-    // Make sure we only select unique features
-    while(randomNumbers.length < n) {
-      val newVal = r.nextInt(upperBound)
-      if(!randomNumbers.contains(newVal))
-        randomNumbers = randomNumbers :+ newVal
-    }
-
-    randomNumbers
-  }
-
-  def selectFeatures(df: DataFrame, featureList: Array[Int]): DataFrame = {
-    val slicer = new VectorSlicer()
-      .setInputCol("features")
-      .setOutputCol("sampledFeatures")
-
-    slicer.setIndices(featureList)
-    slicer.transform(df)
-  }
-
-  def trainDecisionTree(sampleData: DataFrame, features: Array[Int]): PipelineModel = {
-    // Decision tree pipeline
-    val dt = new DecisionTreeClassifier()
-      .setLabelCol("# label")
-      .setFeaturesCol("sampledFeatures")
-
-    val trainingPipeline = new Pipeline()
-      .setStages(Array(dt))
-
-    val bootstrapSample = selectFeatures(sampleData, features)
-
-    trainingPipeline.fit(bootstrapSample)
-  }
-
   def main(args: Array[String]) {
     val logger: org.apache.log4j.Logger = LogManager.getRootLogger
-    if (args.length != 3) {
-      logger.error("Usage:\nrf.RandomForest <input dir> <output dir> <numTrees>")
+    if (args.length != 2) {
+      logger.error("Usage:\nwc.RandomForestMain <input dir> <output dir>")
       System.exit(1)
     }
     val conf = new SparkConf().setAppName("Random Forest Classification")
@@ -77,55 +24,107 @@ object RandomForest {
     val ss = SparkSession.builder().getOrCreate()
     import ss.implicits._
 
-    var dataFrame = ss.read
-      .format("csv")
+    // Number of trees in RandomForest
+    val numTrees = 5
+
+    var dataFrame = ss.read.format("csv")
       .option("header", "true")
       .option("inferSchema", "true")
-      .load(args(0))
-      .withColumn("# label", col("# label")
+      .load("input/sample_train.csv")
+
+    dataFrame = dataFrame
+      .withColumn("# label", dataFrame.col("# label")
         .cast(sql.types.IntegerType))
 
-    // Get list of feature columns, first column is label
+    // Verify column names
+    logger.info("Data Columns:")
     val columns = dataFrame.columns
+    for (col <- columns) {
+      logger.info(col)
+    }
+
+    //Verify data types
+    logger.info("Column data types:")
+    val dataTypes = dataFrame.schema.fields.map(x=>x.dataType).map(x=>x.toString)
+    for (data <- dataTypes) {
+      logger.info(data)
+    }
+
+    // Get list of feature columns, first column is label
     val features = columns.slice(1, columns.length)
-    dataFrame = preprocessData(dataFrame, features)
+
+    // Convert multiple feature columns to single vector column
+    val assembler = new VectorAssembler()
+      .setInputCols(features)
+      .setOutputCol("features")
+
+    val stages = Array(assembler)
+    val preprocessPipeline = new Pipeline()
+      .setStages(stages)
+
+    dataFrame = preprocessPipeline.fit(dataFrame).transform(dataFrame)
+    dataFrame = dataFrame.drop(features:_*)
 
     // Split and broadcast training and testing data
     val Array(trainingData, testData) = dataFrame.randomSplit(Array(0.7, 0.3))
     val testDataWithId = testData.withColumn("Id", monotonically_increasing_id())
-    var models = sc.emptyRDD[(Int, (PipelineModel, Array[Int]))].partitionBy(new HashPartitioner(10))
 
-    val numTotalFeatures = features.length
-    val numRandomFeatures = scala.math.sqrt(features.length).toInt
+    val broadcastTrain = sc.broadcast(trainingData)
+    val broadcastTest = sc.broadcast(testDataWithId)
 
-    // Number of trees in RandomForest
-    val numTrees = args(2).toInt
+    // Decision tree pipeline
+    val dt = new DecisionTreeClassifier()
+      .setLabelCol("# label")
+      .setFeaturesCol("sampledFeatures")
 
-    for (itr <- 0 until numTrees) {
-      // Create a bootstrap sample
-      val bootstrapSample = trainingData
+    val trainingPipeline = new Pipeline()
+      .setStages(Array(dt))
+
+    // RDD of multiple decision tree pipelines
+    var treeArray = Array[(Int, Pipeline)]()
+    for (i <- 0 until numTrees) {
+      treeArray = treeArray :+ (i, trainingPipeline)
+    }
+    val treeRDD: RDD[(Int, Pipeline)] = sc.parallelize(treeArray)
+      .partitionBy(new HashPartitioner(math.ceil(numTrees.toDouble / 10.0).toInt))
+
+    // Train all decision trees
+    val models = treeRDD.map {case (idx, tree)  =>
+      // Create a bootstrap sample for decision tree
+      var bootstrapSample = broadcastTrain.value
         .sample(withReplacement = true, fraction = 1)
 
-      val randomFeatures = getRandomIntList(numTotalFeatures, numRandomFeatures, itr)
-      val dtModel = trainDecisionTree(bootstrapSample, randomFeatures)
-      models = models.union(sc.parallelize(Seq((itr, (dtModel, randomFeatures)))))
+      // Get a random list of features for decision tree
+      val r = new scala.util.Random
+      r.setSeed(idx)
+      var randomFeatures = Array[Int]()
+      for (_ <- 0 until scala.math.sqrt(features.length).toInt) {
+        randomFeatures = randomFeatures :+ r.nextInt(features.length)
+      }
+
+      val slicer = new VectorSlicer()
+        .setInputCol("features")
+        .setOutputCol("sampledFeatures")
+
+      slicer.setIndices(randomFeatures)
+      bootstrapSample = slicer.transform(bootstrapSample)
+
+      (idx, (tree.fit(bootstrapSample), randomFeatures))
     }
 
-    // Predictions of each example from every decision tree
-    var dtPredictions = sc.emptyRDD[(Long, Double)].partitionBy(new HashPartitioner(10))
+    // Get predictions from all decision trees
+    val dtPredictions = models.flatMap {
+      case (_, (tree, randomFeatures)) =>
+        val slicer = new VectorSlicer()
+          .setInputCol("features")
+          .setOutputCol("sampledFeatures")
 
-    for (itr <- 0 until numTrees) {
-      val model = models.lookup(itr)
-      val tree = model.head._1
-      val randomFeatures = model.head._2
-
-      val testData = selectFeatures(testDataWithId, randomFeatures)
-
-      val pred = tree.transform(testData)
-      val tempPreds = pred.select("Id", "prediction").rdd
-        .map(row => (row(0).asInstanceOf[Long], row(1).asInstanceOf[Double]))
-
-      dtPredictions = dtPredictions.union(tempPreds)
+        slicer.setIndices(randomFeatures)
+        val testData = slicer.transform(broadcastTest.value)
+        val pred = tree.transform(testData)
+        pred.select("Id", "prediction").rdd
+          .map(row => (row(0).asInstanceOf[Long], row(1).asInstanceOf[Double]))
+          .collect()
     }
 
     // Set the majority vote as final prediction
@@ -135,12 +134,11 @@ object RandomForest {
 
     // Combine with original data for comparison
     val results = allPredictions.toDF("Id", "prediction").as("preds")
-      .join(testDataWithId.as("test"), col("preds.Id") === col("test.Id"))
+      .join(broadcastTest.value.as("test"), col("preds.Id") === col("test.Id"))
       .select("test.Id", "preds.prediction", "test.# label")
       .repartitionByRange(10, col("Id"))
       .sort("Id")
 
-    // Calculate accuracy
     val numCorrect = sc.longAccumulator("numCorrect")
     val numTotal = sc.longAccumulator("total")
 
