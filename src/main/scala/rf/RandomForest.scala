@@ -3,19 +3,34 @@ package rf
 import nb.NaiveBayesClassifier
 import org.apache.log4j.LogManager
 import org.apache.spark.{HashPartitioner, SparkConf, SparkContext, sql}
-import org.apache.spark.ml.Pipeline
-import org.apache.spark.ml.classification.DecisionTreeClassifier
-import org.apache.spark.ml.feature.{VectorAssembler, VectorSlicer}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
 
+import scala.collection.mutable.ListBuffer
+
 
 object RandomForest {
 
+  def createBootStrap(train: List[Array[Double]], seed: Int): List[Array[Double]] = {
+    val r = new scala.util.Random
+    r.setSeed(seed)
+
+    val length = 5
+    var bootstrap: ListBuffer[Array[Double]] = new ListBuffer[Array[Double]]()
+
+    while(bootstrap.length < length)
+    {
+      val index = r.nextInt(length)
+      bootstrap += train(index)
+    }
+
+    bootstrap.toList
+  }
+
   def main(args: Array[String]) {
     val logger: org.apache.log4j.Logger = LogManager.getRootLogger
-    if (args.length != 3) {
+    if (args.length != 2) {
       logger.error("Usage:\nrf.RandomForestMain <input dir> <output dir>")
       System.exit(1)
     }
@@ -26,7 +41,7 @@ object RandomForest {
     import ss.implicits._
 
     // Number of trees in RandomForest
-    val numModels = 3
+    val numModels = 2
 
     var dataFrame = ss.read.format("csv")
       .option("header", "true")
@@ -56,13 +71,17 @@ object RandomForest {
     // Train all decision trees
     val models = modelRDD.map {case (idx, model)  =>
       // Create a bootstrap sample for Naive Bayes
-      var trainArray = broadcastTrain.value.collect().map(_.toSeq.toArray)
+      var trainArray = broadcastTrain.value.collect().map(_.toSeq.asInstanceOf[Array[Double]]).toList
+
+      var bSample = createBootStrap(trainArray, idx)
+
+      //logger.info(bSample)
 
       // Get a boostrap sample for Naive Bayes model
-      val r = new scala.util.Random(idx)
-      var bootStrapArray = r.shuffle(trainArray.toList).take(50)
+      //val r = new scala.util.Random(idx)
+      //var bootStrapArray = r.shuffle(trainArray.toList).take(50)
 
-      (idx, model.fit(bootStrapArray))
+      (idx, model.fit(bSample))
     }
 
     // Get predictions from all decision trees
