@@ -53,7 +53,7 @@ class NaiveBayesClassifier() extends Serializable {
     this
   }
 
-  def calculate_probability(features: Array[Double], featureMean: Array[Double],
+  def calculateProbability(features: Array[Double], featureMean: Array[Double],
                             featureStd: Array[Double]): Double = {
     val featuresMatrix = DenseMatrix(features)
     val meanMatrix = DenseMatrix(featureMean)
@@ -66,6 +66,28 @@ class NaiveBayesClassifier() extends Serializable {
     val probabilities = exponent.zip(const).map {case (x, y) => x / y}
 
     probabilities.product
+  }
+
+  def predict(test: List[Array[Double]]): Array[Int] = {
+    var predictions = Array[Int]()
+
+    for (ex <- test) {
+      var classProb = mutable.HashMap[Int, Double]()
+
+      for (c <- this.classes) {
+        val classStats = this.statistics(c)
+        val classMean = classStats("mean")
+        val classStd = classStats("std")
+
+        val prob = this.priors(c) * calculateProbability(ex, classMean, classStd)
+        classProb += c -> prob
+      }
+
+      val pred = classProb.max._1
+      predictions = predictions :+ pred
+    }
+
+    predictions
   }
 
 }
