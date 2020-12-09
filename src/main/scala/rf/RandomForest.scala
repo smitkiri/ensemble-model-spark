@@ -1,137 +1,98 @@
 package rf
 
+import nb.NaiveBayesClassifier
 import org.apache.log4j.LogManager
-import org.apache.spark.ml.{Pipeline, PipelineModel}
-import org.apache.spark.ml.classification.DecisionTreeClassifier
-import org.apache.spark.ml.feature.{VectorAssembler, VectorSlicer}
-import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.{HashPartitioner, SparkConf, SparkContext}
+import org.apache.spark.rdd.RDD
+import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
-import org.apache.spark.{HashPartitioner, SparkConf, SparkContext, sql}
+import scala.collection.mutable
+import scala.collection.mutable.ListBuffer
 
 
 object RandomForest {
 
-  def preprocessData(df: DataFrame, featureNames: Array[String]): DataFrame = {
-    // Convert multiple feature columns to single vector column
-    val assembler = new VectorAssembler()
-      .setInputCols(featureNames)
-      .setOutputCol("features")
-
-    val stages = Array(assembler)
-    val preprocessPipeline = new Pipeline()
-      .setStages(stages)
-
-    preprocessPipeline.fit(df)
-      .transform(df)
-      .drop(featureNames:_*)
-  }
-
-  def getRandomIntList(upperBound: Int, n: Int, seed: Int): Array[Int] = {
-    // Get a random list of features for decision tree
+  def createBootStrap(train: Array[Array[Double]], seed: Int): Array[Array[Double]] = {
     val r = new scala.util.Random
     r.setSeed(seed)
-    var randomNumbers: Array[Int] = Array[Int]()
 
-    // Make sure we only select unique features
-    while(randomNumbers.length < n) {
-      val newVal = r.nextInt(upperBound)
-      if(!randomNumbers.contains(newVal))
-        randomNumbers = randomNumbers :+ newVal
+    val length = train.length
+    var bootstrap: ListBuffer[Array[Double]] = new ListBuffer[Array[Double]]()
+
+    while(bootstrap.length < length) {
+      val index = r.nextInt(length)
+      bootstrap += train(index)
     }
 
-    randomNumbers
-  }
-
-  def selectFeatures(df: DataFrame, featureList: Array[Int]): DataFrame = {
-    val slicer = new VectorSlicer()
-      .setInputCol("features")
-      .setOutputCol("sampledFeatures")
-
-    slicer.setIndices(featureList)
-    slicer.transform(df)
-  }
-
-  def trainDecisionTree(sampleData: DataFrame, features: Array[Int]): PipelineModel = {
-    // Decision tree pipeline
-    val dt = new DecisionTreeClassifier()
-      .setLabelCol("# label")
-      .setFeaturesCol("sampledFeatures")
-
-    val trainingPipeline = new Pipeline()
-      .setStages(Array(dt))
-
-    val bootstrapSample = selectFeatures(sampleData, features)
-
-    trainingPipeline.fit(bootstrapSample)
+    bootstrap.toArray
   }
 
   def main(args: Array[String]) {
     val logger: org.apache.log4j.Logger = LogManager.getRootLogger
     if (args.length != 3) {
-      logger.error("Usage:\nrf.RandomForest <input dir> <output dir> <numTrees>")
+      logger.error("Usage:\nrf.RandomForestMain <input dir> <output dir> <num-models>")
       System.exit(1)
     }
-    val conf = new SparkConf().setAppName("Random Forest Classification")
+    val conf = new SparkConf().setAppName("Naive Bayes Ensemble Classification")
     val sc = new SparkContext(conf)
 
     val ss = SparkSession.builder().getOrCreate()
     import ss.implicits._
 
-    var dataFrame = ss.read
-      .format("csv")
+    // Number of trees in RandomForest
+    val numModels = args(2).toInt
+
+    val dataFrame = ss.read.format("csv")
       .option("header", "true")
       .option("inferSchema", "true")
-      .load(args(0))
-      .withColumn("# label", col("# label")
-        .cast(sql.types.IntegerType))
-
-    // Get list of feature columns, first column is label
-    val columns = dataFrame.columns
-    val features = columns.slice(1, columns.length)
-    dataFrame = preprocessData(dataFrame, features)
+      .load("input/sample_train.csv")
 
     // Split and broadcast training and testing data
     val Array(trainingData, testData) = dataFrame.randomSplit(Array(0.7, 0.3))
     val testDataWithId = testData.withColumn("Id", monotonically_increasing_id())
-    var models = sc.emptyRDD[(Int, (PipelineModel, Array[Int]))].partitionBy(new HashPartitioner(10))
 
-    val numTotalFeatures = features.length
-    val numRandomFeatures = scala.math.sqrt(features.length).toInt
+    val trainArray = trainingData.collect().map(_.toSeq.asInstanceOf[mutable.WrappedArray[Double]].toArray)
+    val broadcastTrain = sc.broadcast(trainArray)
 
-    // Number of trees in RandomForest
-    val numTrees = args(2).toInt
+    val testFeatures = testDataWithId
+      .drop("# label", "Id")
+      .collect()
+      .map(_.toSeq.asInstanceOf[mutable.WrappedArray[Double]].toArray)
 
-    for (itr <- 0 until numTrees) {
-      // Create a bootstrap sample
-      val bootstrapSample = trainingData
-        .sample(withReplacement = true, fraction = 1)
+    val testIdArray = testDataWithId.select("Id").collect().map(_.getLong(0))
 
-      val randomFeatures = getRandomIntList(numTotalFeatures, numRandomFeatures, itr)
-      val dtModel = trainDecisionTree(bootstrapSample, randomFeatures)
-      models = models.union(sc.parallelize(Seq((itr, (dtModel, randomFeatures)))))
+    val broadcastTestFeatures = sc.broadcast(testFeatures)
+    val broadcastTestIds = sc.broadcast(testIdArray)
+
+    // RDD of multiple Naive Bayes models
+    var modelArray = Array[(Int, NaiveBayesClassifier)]()
+    for (i <- 0 until numModels) {
+      modelArray = modelArray :+ (i, new NaiveBayesClassifier())
     }
 
-    // Predictions of each example from every decision tree
-    var dtPredictions = sc.emptyRDD[(Long, Double)].partitionBy(new HashPartitioner(10))
+    val modelRDD: RDD[(Int, NaiveBayesClassifier)] = sc.parallelize(modelArray)
+      .partitionBy(new HashPartitioner(math.ceil(numModels.toDouble / 10.0).toInt))
 
-    for (itr <- 0 until numTrees) {
-      val model = models.lookup(itr)
-      val tree = model.head._1
-      val randomFeatures = model.head._2
+    // Train all Naive Bayes Models
+    val models = modelRDD.map {case (idx, model)  =>
+      // Create a bootstrap sample for Naive Bayes
+      val trainArray = broadcastTrain.value
+      val bSample = createBootStrap(trainArray, idx)
 
-      val testData = selectFeatures(testDataWithId, randomFeatures)
+      (idx, model.fit(bSample))
+    }
 
-      val pred = tree.transform(testData)
-      val tempPreds = pred.select("Id", "prediction").rdd
-        .map(row => (row(0).asInstanceOf[Long], row(1).asInstanceOf[Double]))
-
-      dtPredictions = dtPredictions.union(tempPreds)
+    // Get predictions from all models
+    val predictions: RDD[(Long, Int)] = models.flatMap {
+      case (_, model) =>
+        val preds = model.predict(broadcastTestFeatures.value)
+        broadcastTestIds.value.zip(preds)
     }
 
     // Set the majority vote as final prediction
-    val allPredictions = dtPredictions
-      .reduceByKey(_.toInt + _.toInt)
-      .mapValues(x => if (x < numTrees.toDouble / 2) 0 else 1)
+    val allPredictions = predictions
+      .reduceByKey((x, y) => x + y)
+      .mapValues(x => math.round(x.toDouble / numModels.toDouble))
 
     // Combine with original data for comparison
     val results = allPredictions.toDF("Id", "prediction").as("preds")
@@ -140,7 +101,7 @@ object RandomForest {
       .repartitionByRange(10, col("Id"))
       .sort("Id")
 
-    // Calculate accuracy
+    // Check model performance
     val numCorrect = sc.longAccumulator("numCorrect")
     val numTotal = sc.longAccumulator("total")
 
