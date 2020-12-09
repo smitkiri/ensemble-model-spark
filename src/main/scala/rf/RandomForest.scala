@@ -7,6 +7,7 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
 
+import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
 
 
@@ -16,7 +17,7 @@ object RandomForest {
     val r = new scala.util.Random
     r.setSeed(seed)
 
-    val length = 5
+    val length = train.length
     var bootstrap: ListBuffer[Array[Double]] = new ListBuffer[Array[Double]]()
 
     while(bootstrap.length < length)
@@ -48,9 +49,9 @@ object RandomForest {
       .option("inferSchema", "true")
       .load("input/sample_train.csv")
 
-    dataFrame = dataFrame
-      .withColumn("# label", dataFrame.col("# label")
-        .cast(sql.types.IntegerType))
+//    dataFrame = dataFrame
+//      .withColumn("# label", dataFrame.col("# label")
+//        .cast(sql.types.IntegerType))
 
     // Split and broadcast training and testing data
     val Array(trainingData, testData) = dataFrame.randomSplit(Array(0.7, 0.3))
@@ -71,9 +72,9 @@ object RandomForest {
     // Train all decision trees
     val models = modelRDD.map {case (idx, model)  =>
       // Create a bootstrap sample for Naive Bayes
-      var trainArray = broadcastTrain.value.collect().map(_.toSeq.asInstanceOf[Array[Double]]).toList
+      val trainArray = broadcastTrain.value.collect().map(_.toSeq.asInstanceOf[mutable.WrappedArray[Double]].toArray).toList
 
-      var bSample = createBootStrap(trainArray, idx)
+      val bSample = createBootStrap(trainArray, idx)
 
       //logger.info(bSample)
 
@@ -81,23 +82,22 @@ object RandomForest {
       //val r = new scala.util.Random(idx)
       //var bootStrapArray = r.shuffle(trainArray.toList).take(50)
 
+
       (idx, model.fit(bSample))
     }
 
     // Get predictions from all decision trees
-//    val dtPredictions = models.flatMap {
-//      case (_, (tree, randomFeatures)) =>
-//        val slicer = new VectorSlicer()
-//          .setInputCol("features")
-//          .setOutputCol("sampledFeatures")
-//
-//        slicer.setIndices(randomFeatures)
-//        val testData = slicer.transform(broadcastTest.value)
-//        val pred = tree.transform(testData)
-//        pred.select("Id", "prediction").rdd
-//          .map(row => (row(0).asInstanceOf[Long], row(1).asInstanceOf[Double]))
-//          .collect()
-//    }
+    val predictions: RDD[(Long, (Int, Double))] = models.flatMap {
+      case (idx, model) =>
+
+        val trueY = broadcastTest.value.select("# label").collect().map(_.getDouble(0))
+        val testData = broadcastTest.value.drop("# label", "Id").collect().map(_.toSeq.asInstanceOf[mutable.WrappedArray[Double]].toArray).toList
+        val testId = broadcastTest.value.select("Id").collect().map(_.getLong(0))
+        val preds = model.predict(testData)
+        testId.zip(preds.zip(trueY))
+    }
+
+    predictions.saveAsTextFile(args(1))
 //
 //    // Set the majority vote as final prediction
 //    val allPredictions = dtPredictions
