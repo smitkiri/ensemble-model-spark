@@ -8,6 +8,7 @@ import scala.collection.mutable
 class NaiveBayesClassifier() extends Serializable {
   var classes: Set[Int] = Set()
   var statistics: mutable.HashMap[Int, mutable.HashMap[String, Array[Double]]] = mutable.HashMap()
+  var priors: mutable.HashMap[Int, Float] = mutable.HashMap()
 
   def getPriors(target: Array[Int]): mutable.HashMap[Int, Float] = {
     // Total examples
@@ -32,7 +33,7 @@ class NaiveBayesClassifier() extends Serializable {
 
     val xTrainMatrix: DenseMatrix[Double] = trainMatrix.delete(0, Axis._1)
 
-    val priors = getPriors(yTrain)
+    this.priors = getPriors(yTrain)
     this.classes = yTrain.toSet
 
     for (c <- this.classes) {
@@ -52,5 +53,19 @@ class NaiveBayesClassifier() extends Serializable {
     this
   }
 
+  def calculate_probability(features: Array[Double], featureMean: Array[Double],
+                            featureStd: Array[Double]): Double = {
+    val featuresMatrix = DenseMatrix(features)
+    val meanMatrix = DenseMatrix(featureMean)
+    val varianceMatrix = DenseMatrix(featureStd.map(v => 2 * scala.math.pow(v, 2)))
+
+    val exponentVal = pow(featuresMatrix - meanMatrix, 2) / varianceMatrix
+    val exponent = exponentVal.toArray.map(v => scala.math.exp(-1 * v))
+    val const = featureStd.map(v => v * scala.math.sqrt(2 * scala.math.Pi))
+
+    val probabilities = exponent.zip(const).map {case (x, y) => x / y}
+
+    probabilities.product
+  }
 
 }
