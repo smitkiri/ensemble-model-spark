@@ -23,7 +23,7 @@ class NaiveBayesClassifier() extends Serializable {
     probability
   }
 
-  def fit(train : List[Array[Double]]): NaiveBayesClassifier = {
+  def fit(train : Array[Array[Double]]): NaiveBayesClassifier = {
     // Convert data to a DenseMatrix
     val trainMatrix: DenseMatrix[Double] = DenseMatrix(train:_*)
 
@@ -65,7 +65,7 @@ class NaiveBayesClassifier() extends Serializable {
     probabilities.toArray.sum
   }
 
-  def predict(test: List[Array[Double]]): Array[Int] = {
+  def predict(test: Array[Array[Double]]): Array[Int] = {
     var predictions = Array[Int]()
 
     for (ex <- test) {

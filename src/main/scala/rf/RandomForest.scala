@@ -12,26 +12,25 @@ import scala.collection.mutable.ListBuffer
 
 object RandomForest {
 
-  def createBootStrap(train: List[Array[Double]], seed: Int): List[Array[Double]] = {
+  def createBootStrap(train: Array[Array[Double]], seed: Int): Array[Array[Double]] = {
     val r = new scala.util.Random
     r.setSeed(seed)
 
     val length = train.length
     var bootstrap: ListBuffer[Array[Double]] = new ListBuffer[Array[Double]]()
 
-    while(bootstrap.length < length)
-    {
+    while(bootstrap.length < length) {
       val index = r.nextInt(length)
       bootstrap += train(index)
     }
 
-    bootstrap.toList
+    bootstrap.toArray
   }
 
   def main(args: Array[String]) {
     val logger: org.apache.log4j.Logger = LogManager.getRootLogger
     if (args.length != 3) {
-      logger.error("Usage:\nrf.RandomForestMain <input dir> <output dir>")
+      logger.error("Usage:\nrf.RandomForestMain <input dir> <output dir> <num-models>")
       System.exit(1)
     }
     val conf = new SparkConf().setAppName("Naive Bayes Ensemble Classification")
@@ -41,7 +40,7 @@ object RandomForest {
     import ss.implicits._
 
     // Number of trees in RandomForest
-    val numModels = 5
+    val numModels = args(2).toInt
 
     val dataFrame = ss.read.format("csv")
       .option("header", "true")
@@ -52,19 +51,20 @@ object RandomForest {
     val Array(trainingData, testData) = dataFrame.randomSplit(Array(0.7, 0.3))
     val testDataWithId = testData.withColumn("Id", monotonically_increasing_id())
 
-    val trainList = trainingData.collect().map(_.toSeq.asInstanceOf[mutable.WrappedArray[Double]].toArray).toList
-    val broadcastTrain = sc.broadcast(trainList)
+    val trainArray = trainingData.collect().map(_.toSeq.asInstanceOf[mutable.WrappedArray[Double]].toArray)
+    val broadcastTrain = sc.broadcast(trainArray)
 
     val testFeatures = testDataWithId
       .drop("# label", "Id")
-      .collect().map(_.toSeq.asInstanceOf[mutable.WrappedArray[Double]].toArray)
-      .toList
+      .collect()
+      .map(_.toSeq.asInstanceOf[mutable.WrappedArray[Double]].toArray)
+
     val testIdArray = testDataWithId.select("Id").collect().map(_.getLong(0))
 
     val broadcastTestFeatures = sc.broadcast(testFeatures)
     val broadcastTestIds = sc.broadcast(testIdArray)
 
-    // RDD of multiple decision tree pipelines
+    // RDD of multiple Naive Bayes models
     var modelArray = Array[(Int, NaiveBayesClassifier)]()
     for (i <- 0 until numModels) {
       modelArray = modelArray :+ (i, new NaiveBayesClassifier())
@@ -73,7 +73,7 @@ object RandomForest {
     val modelRDD: RDD[(Int, NaiveBayesClassifier)] = sc.parallelize(modelArray)
       .partitionBy(new HashPartitioner(math.ceil(numModels.toDouble / 10.0).toInt))
 
-    // Train all decision trees
+    // Train all Naive Bayes Models
     val models = modelRDD.map {case (idx, model)  =>
       // Create a bootstrap sample for Naive Bayes
       val trainArray = broadcastTrain.value
@@ -82,19 +82,17 @@ object RandomForest {
       (idx, model.fit(bSample))
     }
 
-    // Get predictions from all decision trees
+    // Get predictions from all models
     val predictions: RDD[(Long, Int)] = models.flatMap {
       case (_, model) =>
         val preds = model.predict(broadcastTestFeatures.value)
         broadcastTestIds.value.zip(preds)
     }
 
-    predictions.partitionBy(new HashPartitioner(10))
-
     // Set the majority vote as final prediction
     val allPredictions = predictions
       .reduceByKey((x, y) => x + y)
-      .mapValues(x => if (x <= numModels.toDouble / 2) 0 else 1)
+      .mapValues(x => math.round(x.toDouble / numModels.toDouble))
 
     // Combine with original data for comparison
     val results = allPredictions.toDF("Id", "prediction").as("preds")
@@ -103,6 +101,7 @@ object RandomForest {
       .repartitionByRange(10, col("Id"))
       .sort("Id")
 
+    // Check model performance
     val numCorrect = sc.longAccumulator("numCorrect")
     val numTotal = sc.longAccumulator("total")
 
