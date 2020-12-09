@@ -1,4 +1,4 @@
-package rf
+package ensemble
 
 import nb.NaiveBayesClassifier
 import org.apache.log4j.LogManager
@@ -10,7 +10,7 @@ import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
 
 
-object RandomForest {
+object NaiveBayesEnsemble {
 
   def createBootStrap(train: Array[Array[Double]], seed: Int): Array[Array[Double]] = {
     val r = new scala.util.Random
@@ -30,7 +30,7 @@ object RandomForest {
   def main(args: Array[String]) {
     val logger: org.apache.log4j.Logger = LogManager.getRootLogger
     if (args.length != 3) {
-      logger.error("Usage:\nrf.RandomForestMain <input dir> <output dir> <num-models>")
+      logger.error("Usage:\nensemble.NaiveBayesEnsemble <input dir> <output dir> <num-models>")
       System.exit(1)
     }
     val conf = new SparkConf().setAppName("Naive Bayes Ensemble Classification")
