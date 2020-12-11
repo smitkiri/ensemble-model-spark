@@ -71,7 +71,7 @@ object NaiveBayesEnsemble {
     }
 
     val modelRDD: RDD[(Int, NaiveBayesClassifier)] = sc.parallelize(modelArray)
-      .partitionBy(new HashPartitioner(math.ceil(numModels.toDouble / 10.0).toInt))
+      .partitionBy(new HashPartitioner(math.ceil(numModels.toDouble / 16.0).toInt))
 
     // Train all Naive Bayes Models
     val models = modelRDD.map {case (idx, model)  =>
@@ -98,7 +98,7 @@ object NaiveBayesEnsemble {
     val results = allPredictions.toDF("Id", "prediction").as("preds")
       .join(testDataWithId.as("test"), col("preds.Id") === col("test.Id"))
       .select("test.Id", "preds.prediction", "test.# label")
-      .repartitionByRange(10, col("Id"))
+      .repartitionByRange(16, col("Id"))
       .sort("Id")
 
     // Check model performance
