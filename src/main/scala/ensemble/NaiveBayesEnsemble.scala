@@ -45,7 +45,7 @@ object NaiveBayesEnsemble {
     val dataFrame = ss.read.format("csv")
       .option("header", "true")
       .option("inferSchema", "true")
-      .load("input/sample_train.csv")
+      .load(args(0))
 
     // Split and broadcast training and testing data
     val Array(trainingData, testData) = dataFrame.randomSplit(Array(0.7, 0.3))
@@ -71,7 +71,7 @@ object NaiveBayesEnsemble {
     }
 
     val modelRDD: RDD[(Int, NaiveBayesClassifier)] = sc.parallelize(modelArray)
-      .partitionBy(new HashPartitioner(math.ceil(numModels.toDouble / 16.0).toInt))
+      .partitionBy(new HashPartitioner(16))
 
     // Train all Naive Bayes Models
     val models = modelRDD.map {case (idx, model)  =>
