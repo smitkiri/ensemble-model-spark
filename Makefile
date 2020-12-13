@@ -4,25 +4,28 @@
 # -----------------------------------------------------------
 spark.root=/opt/spark
 hadoop.root=/usr/local/hadoop
-app.name=Word Count
+app.name=Naive Bayes Ensemble
 jar.name=spark-demo.jar
 maven.jar.name=spark-demo-1.0.jar
-job.name=rf.RandomForestMain
+job.name=ensemble.NaiveBayesEnsemble
 local.master=local[4]
 local.input=input
-local.output=output-s1
+local.output=output-pred
+local.numModels=50
+local.log=log-8-50-16
 # Pseudo-Cluster Execution
-hdfs.user.name=joe
+hdfs.user.name=hadoopuser
 hdfs.input=input
 hdfs.output=output
 # AWS EMR Execution
 aws.emr.release=emr-5.17.0
-aws.bucket.name=mr-median-tw-spark-sort
+aws.bucket.name=naive-bayes-6240-750
 aws.input=input
-aws.output=output-s1
-aws.log.dir=log
-aws.num.nodes=5
-aws.instance.type=m3.xlarge
+aws.output=output/output-8-50-16-750
+aws.log.dir=log/log-8-50-16-750
+aws.num.nodes=8
+aws.instance.type=m4.large
+aws.numModels=50
 # -----------------------------------------------------------
 
 # Compiles code and builds jar (with dependencies).
@@ -36,7 +39,7 @@ clean-local-output:
 
 # Runs standalone
 local: jar clean-local-output
-	spark-submit --class ${job.name} --master ${local.master} --name "${app.name}" ${jar.name} ${local.input} ${local.output}
+	spark-submit --class ${job.name} --master ${local.master} --name "${app.name}" ${jar.name} ${local.input} ${local.output} ${local.numModels}
 
 # Start HDFS
 start-hdfs:
@@ -110,11 +113,11 @@ upload-app-aws:
 # Main EMR launch.
 aws: jar upload-app-aws delete-output-aws
 	aws emr create-cluster \
-		--name "Twitter Sorted Spark Cluster-Final Run" \
+		--name "Naive-Bayes-Ensemble-8-50-16-750" \
 		--release-label ${aws.emr.release} \
 		--instance-groups '[{"InstanceCount":${aws.num.nodes},"InstanceGroupType":"CORE","InstanceType":"${aws.instance.type}"},{"InstanceCount":1,"InstanceGroupType":"MASTER","InstanceType":"${aws.instance.type}"}]' \
 	    --applications Name=Hadoop Name=Spark \
-		--steps Type=CUSTOM_JAR,Name="${app.name}",Jar="command-runner.jar",ActionOnFailure=TERMINATE_CLUSTER,Args=["spark-submit","--deploy-mode","cluster","--class","${job.name}","s3://${aws.bucket.name}/${jar.name}","s3://${aws.bucket.name}/${aws.input}","s3://${aws.bucket.name}/${aws.output}"] \
+		--steps Type=CUSTOM_JAR,Name="${app.name}",Jar="command-runner.jar",ActionOnFailure=TERMINATE_CLUSTER,Args=["spark-submit","--deploy-mode","cluster","--class","${job.name}","s3://${aws.bucket.name}/${jar.name}","s3://${aws.bucket.name}/${aws.input}","s3://${aws.bucket.name}/${aws.output}","${aws.numModels}"] \
 		--log-uri s3://${aws.bucket.name}/${aws.log.dir} \
 		--use-default-roles \
 		--enable-debugging \
@@ -124,6 +127,10 @@ aws: jar upload-app-aws delete-output-aws
 download-output-aws: clean-local-output
 	mkdir ${local.output}
 	aws s3 sync s3://${aws.bucket.name}/${aws.output} ${local.output}
+
+download-log-aws:
+	mkdir ${local.log}
+	aws s3 sync s3://${aws.bucket.name}/${aws.log} ${local.log}
 
 # Change to standalone mode.
 switch-standalone:

@@ -1,4 +1,4 @@
-#HEPMASS Dataset - Random Forest<br> 
+# HEPMASS Dataset - Naive Bayes Ensemble<br> 
 Project for CS-6240<br>
 Fall 2020
 
