@@ -2,30 +2,30 @@
 
 # Customize these paths for your environment.
 # -----------------------------------------------------------
-spark.root=/opt/spark
-hadoop.root=/usr/local/hadoop
-app.name=Naive Bayes Ensemble
-jar.name=spark-demo.jar
-maven.jar.name=spark-demo-1.0.jar
+spark.root=/opt/spark-2.3.1-bin-without-hadoop/
+hadoop.root=/usr/local/hadoop-2.9.2
+app.name=Random Forest
+jar.name=random-forest.jar
+maven.jar.name=random-forest-1.0.jar
 job.name=ensemble.NaiveBayesEnsemble
 local.master=local[4]
 local.input=input
-local.output=output-pred
-local.numModels=50
-local.log=log-8-50-16
+local.output=output-s2
+local.numTrees=5
+local.log=Log-Runs-100/Log-4
 # Pseudo-Cluster Execution
-hdfs.user.name=hadoopuser
+hdfs.user.name=smit
 hdfs.input=input
-hdfs.output=output
+hdfs.output=output-s2
 # AWS EMR Execution
 aws.emr.release=emr-5.17.0
-aws.bucket.name=naive-bayes-6240-750
+aws.bucket.name=smitkiri-spark
 aws.input=input
-aws.output=output/output-8-50-16-750
-aws.log.dir=log/log-8-50-16-750
+aws.output=output/output-8-100
+aws.log.dir=log/log-4-100
 aws.num.nodes=8
 aws.instance.type=m4.large
-aws.numModels=50
+aws.numModels=100
 # -----------------------------------------------------------
 
 # Compiles code and builds jar (with dependencies).
@@ -39,16 +39,16 @@ clean-local-output:
 
 # Runs standalone
 local: jar clean-local-output
-	spark-submit --class ${job.name} --master ${local.master} --name "${app.name}" ${jar.name} ${local.input} ${local.output} ${local.numModels}
+	spark-submit --class ${job.name} --master ${local.master} --name "${app.name}" ${jar.name} ${local.input} ${local.output} ${local.numTrees}
 
 # Start HDFS
 start-hdfs:
 	${hadoop.root}/sbin/start-dfs.sh
 
 # Stop HDFS
-stop-hdfs: 
+stop-hdfs:
 	${hadoop.root}/sbin/stop-dfs.sh
-	
+
 # Start YARN
 start-yarn: stop-yarn
 	${hadoop.root}/sbin/start-yarn.sh
@@ -62,7 +62,7 @@ format-hdfs: stop-hdfs
 	rm -rf /tmp/hadoop*
 	${hadoop.root}/bin/hdfs namenode -format
 
-# Initializes user & input directories of HDFS.	
+# Initializes user & input directories of HDFS.
 init-hdfs: start-hdfs
 	${hadoop.root}/bin/hdfs dfs -rm -r -f /user
 	${hadoop.root}/bin/hdfs dfs -mkdir /user
@@ -85,12 +85,12 @@ download-output-hdfs:
 # Runs pseudo-clustered (ALL). ONLY RUN THIS ONCE, THEN USE: make pseudoq
 # Make sure Hadoop  is set up (in /etc/hadoop files) for pseudo-clustered operation (not standalone).
 # https://hadoop.apache.org/docs/current/hadoop-project-dist/hadoop-common/SingleCluster.html#Pseudo-Distributed_Operation
-pseudo: jar stop-yarn format-hdfs init-hdfs upload-input-hdfs start-yarn clean-local-output 
-	spark-submit --class ${job.name} --master yarn --deploy-mode cluster ${jar.name} ${local.input} ${local.output}
+pseudo: jar stop-yarn format-hdfs init-hdfs upload-input-hdfs start-yarn clean-local-output
+	spark-submit --class ${job.name} --master yarn --deploy-mode cluster ${jar.name} ${local.input} ${local.output} ${local.numTrees}
 	make download-output-hdfs
 
 # Runs pseudo-clustered (quickie).
-pseudoq: jar clean-local-output clean-hdfs-output 
+pseudoq: jar clean-local-output clean-hdfs-output
 	spark-submit --class ${job.name} --master yarn --deploy-mode cluster ${jar.name} ${local.input} ${local.output}
 	make download-output-hdfs
 
@@ -101,7 +101,7 @@ make-bucket:
 # Upload data to S3 input dir.
 upload-input-aws: make-bucket
 	aws s3 sync ${local.input} s3://${aws.bucket.name}/${aws.input}
-	
+
 # Delete S3 output dir.
 delete-output-aws:
 	aws s3 rm s3://${aws.bucket.name}/ --recursive --exclude "*" --include "${aws.output}*"
@@ -113,7 +113,7 @@ upload-app-aws:
 # Main EMR launch.
 aws: jar upload-app-aws delete-output-aws
 	aws emr create-cluster \
-		--name "Naive-Bayes-Ensemble-8-50-16-750" \
+		--name "Naive Bayes Ensemble 4-100" \
 		--release-label ${aws.emr.release} \
 		--instance-groups '[{"InstanceCount":${aws.num.nodes},"InstanceGroupType":"CORE","InstanceType":"${aws.instance.type}"},{"InstanceCount":1,"InstanceGroupType":"MASTER","InstanceType":"${aws.instance.type}"}]' \
 	    --applications Name=Hadoop Name=Spark \
@@ -122,15 +122,16 @@ aws: jar upload-app-aws delete-output-aws
 		--use-default-roles \
 		--enable-debugging \
 		--auto-terminate
-		
+
 # Download output from S3.
 download-output-aws: clean-local-output
 	mkdir ${local.output}
 	aws s3 sync s3://${aws.bucket.name}/${aws.output} ${local.output}
 
+# Download log from S3.
 download-log-aws:
 	mkdir ${local.log}
-	aws s3 sync s3://${aws.bucket.name}/${aws.log} ${local.log}
+	aws s3 sync s3://${aws.bucket.name}/${aws.log.dir} ${local.log}
 
 # Change to standalone mode.
 switch-standalone:
@@ -154,4 +155,3 @@ distro:
 	cp README.txt build/deliv/Spark-Demo
 	tar -czf Spark-Demo.tar.gz -C build/deliv Spark-Demo
 	cd build/deliv && zip -rq ../../Spark-Demo.zip Spark-Demo
-	

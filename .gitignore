@@ -28,3 +28,6 @@ hs_err_pid*
 target/
 /spark-warehouse/
 input/
+output*/
+Output/
+Log*/
